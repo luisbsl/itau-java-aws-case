@@ -351,25 +351,6 @@ make apply
 ./gradlew :services:payment-api:bootRun
 ```
 
-## ⚡ Quick Start
-
-```bash
-# 1. Clone o repositório
-git clone https://github.com/SEU_USUARIO/itau-java-aws-case.git
-cd itau-java-aws-case
-
-# 2. Execute o setup automatizado
-make up          # Sobe LocalStack e PostgreSQL
-make apply       # Provisiona infraestrutura
-
-# 3. Execute os serviços
-./gradlew :services:payment-worker:bootRun &
-./gradlew :services:payment-api:bootRun &
-
-# 4. Teste o fluxo
-make curl
-```
-
 ### Testar o Fluxo
 
 ```bash
