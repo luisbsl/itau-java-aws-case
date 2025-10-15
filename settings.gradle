@@ -1,0 +1,5 @@
+rootProject.name = 'itau-java-aws-case'
+
+include 'lambdas:payment-intake'
+include 'services:payment-worker'
+include 'services:payment-api'

@@ -1,0 +1,32 @@
+spring:
+  application:
+    name: payment-worker
+  datasource:
+    url: jdbc:postgresql://localhost:5432/payments
+    username: postgres
+    password: postgres
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+  flyway:
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+aws:
+  region: us-east-1
+  localstack: true
+  endpoint: http://localhost:4566
+
+queues:
+  payments: payments-queue
+
+logging:
+  level:
+    root: INFO
+    com.itau.challenge: DEBUG
+    software.amazon.awssdk: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"

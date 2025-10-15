@@ -1,0 +1,25 @@
+cat > .gitattributes << 'EOF'
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Shell scripts
+*.sh text eol=lf
+
+# Gradle wrapper
+gradlew text eol=lf
+gradle/wrapper/*.jar binary
+
+# Java sources
+*.java text diff=java
+*.gradle text diff=java
+*.xml text
+*.properties text
+
+# Documentation
+*.md text
+*.txt text
+
+# Archives
+*.jar binary
+*.zip binary
+EOF

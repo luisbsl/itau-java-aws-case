@@ -1,0 +1,32 @@
+plugins {
+  id 'org.springframework.boot' version '3.3.3'
+  id 'io.spring.dependency-management' version '1.1.5'
+  id 'java'
+}
+
+repositories {
+  mavenCentral()
+}
+
+dependencies {
+  implementation 'org.springframework.boot:spring-boot-starter'
+  implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+  
+  // AWS SDK v2
+  implementation 'software.amazon.awssdk:sqs:2.20.56'
+  implementation 'software.amazon.awssdk:auth:2.20.56'
+  implementation 'software.amazon.awssdk:regions:2.20.56'
+  implementation 'software.amazon.awssdk:apache-client:2.20.56'
+  
+  implementation 'org.postgresql:postgresql:42.7.3'
+  implementation 'org.flywaydb:flyway-core:10.11.0'
+  implementation 'org.flywaydb:flyway-database-postgresql:10.11.0'
+  
+  implementation 'com.fasterxml.jackson.core:jackson-databind'
+  
+  testImplementation 'org.springframework.boot:spring-boot-starter-test'
+}
+
+tasks.named('test') { 
+  useJUnitPlatform() 
+}

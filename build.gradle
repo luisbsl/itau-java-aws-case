@@ -1,0 +1,10 @@
+plugins { id 'java' }
+
+subprojects {
+  apply plugin: 'java'
+  group = 'com.itau.challenge'
+  version = '0.2.0'
+  repositories { mavenCentral() }
+  java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
+  test { useJUnitPlatform() }
+}
