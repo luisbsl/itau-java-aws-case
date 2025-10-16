@@ -14,8 +14,8 @@ Demonstrar competências técnicas alinhadas aos requisitos da vaga:
 - ✅ Integração com serviços AWS (**Lambda**, **SQS**, **SNS**, **DynamoDB**, **API Gateway**)
 - ✅ Provisionamento de infraestrutura com **Terraform**
 - ✅ Arquitetura de microserviços e mensageria
-- ✅ Testes e qualidade de código
 - ✅ Containerização e ambiente local
+- ✅ Migrations com Flyway
 
 ---
 
@@ -24,34 +24,70 @@ Demonstrar competências técnicas alinhadas aos requisitos da vaga:
 ### Visão Geral
 
 ```
-┌─────────────┐      ┌──────────────┐      ┌─────────┐      ┌─────┐
-│ API Gateway │─────▶│ Lambda       │─────▶│ SNS     │─────▶│ SQS │
-│             │      │ (payment-    │      │ Topic   │      │Queue│
-└─────────────┘      │  intake)     │      └─────────┘      └──┬──┘
-                     └──────┬───────┘                          │
-                            │                                   │
-                            ▼                                   ▼
-                     ┌──────────────┐              ┌────────────────┐
-                     │  DynamoDB    │              │ Payment Worker │
-                     │  (payments)  │              │  (Spring Boot) │
-                     └──────────────┘              └───────┬────────┘
-                                                           │
-                     ┌──────────────┐                     ▼
-                     │ Payment API  │◀─────────┌───────────────┐
-                     │(Spring Boot) │          │  PostgreSQL   │
-                     └──────────────┘          │  (RDS local)  │
-                                               └───────────────┘
+                                   ┌─────────────────────────────────────┐
+                                   │         Cliente HTTP                │
+                                   └──────────────┬──────────────────────┘
+                                                  │
+                                                  │ POST /payments
+                                                  ▼
+                                   ┌─────────────────────────────────────┐
+                                   │         API Gateway                 │
+                                   │    (LocalStack Port 4566)           │
+                                   └──────────────┬──────────────────────┘
+                                                  │
+                                                  │ Proxy Request
+                                                  ▼
+                                   ┌─────────────────────────────────────┐
+                                   │    Lambda: payment-intake           │
+                                   │    Handler: PaymentIntakeHandler    │
+                                   │    - Valida payload                 │
+                                   │    - Gera UUID                      │
+                                   │    - Persiste no DynamoDB           │
+                                   │    - Publica no SNS                 │
+                                   └──────────┬────────────┬─────────────┘
+                                              │            │
+                                    ┌─────────▼──┐      ┌──▼─────────────┐
+                                    │ DynamoDB   │      │   SNS Topic    │
+                                    │  payments  │      │ payments-topic │
+                                    └─────┬──────┘      └──┬─────────────┘
+                                          │                 │
+                                          │                 │ Fanout
+                                          │                 ▼
+                                          │         ┌───────────────────┐
+                                          │         │    SQS Queue      │
+                                          │         │ payments-queue    │
+                                          │         └───────┬───────────┘
+                                          │                 │
+                                          │                 │ Polling (1s)
+                                          │                 ▼
+                                          │         ┌───────────────────┐
+                      ┌───────────────────┤         │  Payment Worker   │
+                      │ GET /payments/{id}│         │  (Spring Boot)    │
+                      │                   │         │  - Consome SQS    │
+                      ▼                   │         │  - Persiste no    │
+           ┌─────────────────────┐        │         │    PostgreSQL     │
+           │   Payment API       │        │         └────────┬──────────┘
+           │   (Spring Boot)     │        │                  │
+           │   Port 8081         │        │                  │ JDBC
+           │   - Lê do DynamoDB  │◀───────┘                  ▼
+           └─────────────────────┘                  ┌─────────────────┐
+                                                    │   PostgreSQL    │
+                                                    │ payment_events  │
+                                                    │  (Audit Log)    │
+                                                    └─────────────────┘
 ```
 
 ### Fluxo de Dados
 
-1. **Ingestão**: Cliente envia POST `/payments` via API Gateway
+1. **Ingestão**: Cliente envia `POST /payments` via API Gateway
 2. **Processamento Síncrono**: Lambda valida e persiste no DynamoDB
-3. **Publicação**: Lambda publica evento no SNS Topic
+3. **Publicação**: Lambda publica evento no SNS Topic (`payments-topic`)
 4. **Distribuição**: SNS encaminha para SQS Queue (fanout pattern)
-5. **Consumo Assíncrono**: Worker Spring Boot consome da fila
-6. **Persistência**: Dados armazenados em PostgreSQL (audit/analytics)
-7. **Consulta**: Payment API permite leitura via GET `/payments/{id}`
+5. **Consumo Assíncrono**: Worker Spring Boot consome da fila SQS
+6. **Auditoria**: Worker insere eventos em PostgreSQL (tabela `payment_events`)
+7. **Consulta**: Payment API permite leitura via `GET /payments/{id}` **diretamente do DynamoDB**
+
+> **⚠️ Nota Importante**: O Payment API **NÃO** lê do PostgreSQL. Ele consulta diretamente o DynamoDB para obter dados transacionais. O PostgreSQL é usado **exclusivamente pelo Worker** para auditoria/analytics
 
 ---
 
@@ -189,7 +225,16 @@ resource "aws_lambda_function" "payment_intake" {
   handler       = "com.itau.challenge.PaymentIntakeHandler::handleRequest"
   runtime       = "java21"
   timeout       = 15
-  # ...
+
+  environment {
+    variables = {
+      TABLE_NAME      = aws_dynamodb_table.payments.name
+      TOPIC_ARN       = aws_sns_topic.payments_topic.arn
+      AWS_REGION      = "us-east-1"
+      LOCALSTACK      = "true"
+      LOCALSTACK_HOST = "host.docker.internal"
+    }
+  }
 }
 ```
 
@@ -249,7 +294,7 @@ create table payment_events (
 **Endpoints**:
 
 - `GET /health` - Health check
-- `GET /payments/{id}` - Consulta pagamento por ID no DynamoDB
+- `GET /payments/{id}` - Consulta pagamento por ID **diretamente no DynamoDB**
 
 **Tecnologias**:
 
@@ -258,16 +303,19 @@ create table payment_events (
 - AWS SDK v2 (DynamoDB)
 - Spring Actuator
 
+> **⚠️ Nota Técnica**: Embora o `application.yml` contenha configuração de PostgreSQL, este serviço **não utiliza** banco relacional. A configuração está presente apenas para evitar erros de autoconfiguration do Spring Boot, mas nenhum DAO/Repository é injetado.
+
 **Exemplo de Resposta**:
 
 ```json
 {
   "paymentId": "550e8400-e29b-41d4-a716-446655440000",
   "amount": "49.90",
-  "customerId": "C777",
-  "status": "PENDING"
+  "customerId": "C777"
 }
 ```
+
+> **⚠️ Importante**: O campo `status` não está implementado. A resposta contém apenas `paymentId`, `amount` e `customerId`.
 
 ---
 
@@ -322,11 +370,11 @@ make apply  # terraform apply -auto-approve
 # Verificar Java 21
 java -version  # openjdk 21.x.x
 
-# Instalar Gradle (via SDKMAN)
-sdk install gradle 8.9
-
 # Verificar Docker
 docker --version && docker compose version
+
+# Instalar AWS CLI (opcional, para testes manuais)
+pip install awscli-local
 ```
 
 ### Setup Completo
@@ -335,8 +383,8 @@ docker --version && docker compose version
 # 1. Subir infraestrutura local
 docker compose up -d
 
-# 2. Gerar Gradle Wrapper
-gradle wrapper --gradle-version 8.9
+# 2. Verificar Gradle Wrapper (se não existir, gerar)
+./gradlew --version || gradle wrapper --gradle-version 8.9
 chmod +x gradlew
 
 # 3. Compilar Lambda
@@ -346,10 +394,14 @@ chmod +x gradlew
 make package-lambda
 make apply
 
-# 5. Executar serviços Spring Boot (em terminais separados)
+# 5. Executar Worker (Terminal 1)
 ./gradlew :services:payment-worker:bootRun
+
+# 6. Executar API (Terminal 2)
 ./gradlew :services:payment-api:bootRun
 ```
+
+> **⚠️ Importante**: Os serviços Spring Boot (`payment-worker` e `payment-api`) devem rodar em **terminais separados** pois são processos bloqueantes.
 
 ### Testar o Fluxo
 
@@ -372,23 +424,40 @@ docker exec -it postgres psql -U postgres -d payments \
 
 ## 🧪 Testes
 
-### Estrutura de Testes
+### Status Atual
+
+⚠️ **Este projeto é um protótipo demonstrativo**. Testes unitários e de integração não estão implementados.
+
+### Testes Manuais
 
 ```bash
-# Executar todos os testes
-./gradlew test
+# Testar fluxo completo end-to-end
+make curl
 
-# Testes por módulo
-./gradlew :lambdas:payment-intake:test
-./gradlew :services:payment-worker:test
-./gradlew :services:payment-api:test
+# Verificar Worker logs
+docker logs -f payment-worker 2>&1 | grep -i payment
+
+# Consultar API
+PAYMENT_ID="550e8400-e29b-41d4-a716-446655440000"
+curl http://localhost:8081/payments/$PAYMENT_ID
+
+# Verificar no PostgreSQL
+docker exec -it postgres psql -U postgres -d payments \
+  -c "SELECT * FROM payment_events ORDER BY received_at DESC LIMIT 5;"
+
+# Verificar no DynamoDB (via awslocal)
+awslocal dynamodb scan --table-name payments --max-items 5
 ```
 
-### Cobertura
+### Melhorias Futuras
 
-- **Lambda**: Testes unitários com JUnit 5
-- **Worker**: Testes de integração com Testcontainers (PostgreSQL)
-- **API**: Testes de controller com MockMvc
+Para um ambiente de produção, seria necessário implementar:
+
+- [ ] Testes unitários com JUnit 5 + Mockito
+- [ ] Testes de integração com Testcontainers (LocalStack + PostgreSQL)
+- [ ] Testes de contrato (Spring Cloud Contract)
+- [ ] Testes de carga (JMeter / Gatling)
+- [ ] Análise de cobertura (JaCoCo)
 
 ---
 
@@ -423,8 +492,8 @@ logging:
 
 ### Checklist
 
-1. **Código**:
-   - Remover variáveis `LOCALSTACK*` dos handlers
+1. **Código Lambda**:
+   - Remover variáveis `LOCALSTACK` e `LOCALSTACK_HOST` do handler
    - Configurar `endpointOverride` condicional via env vars
 2. **Terraform**:
 
@@ -433,6 +502,19 @@ logging:
    provider "aws" {
      region = "us-east-1"
      # Usar credenciais reais (AWS CLI / IAM Roles)
+   }
+
+   # Remover variáveis de ambiente do Lambda
+   resource "aws_lambda_function" "payment_intake" {
+     # ...
+     environment {
+       variables = {
+         TABLE_NAME = aws_dynamodb_table.payments.name
+         TOPIC_ARN  = aws_sns_topic.payments_topic.arn
+         AWS_REGION = "us-east-1"
+         # Remover LOCALSTACK e LOCALSTACK_HOST
+       }
+     }
    }
    ```
 
@@ -530,6 +612,16 @@ aws --endpoint-url=http://localhost:4566 sqs receive-message \
 docker logs localstack | grep payment-intake
 ```
 
+**5. Comando `make curl` falha**
+
+```bash
+# Verificar se awslocal está instalado
+which awslocal || pip install awscli-local
+
+# Ou usar aws cli com endpoint
+aws --endpoint-url=http://localhost:4566 apigateway get-rest-apis
+```
+
 ---
 
 ## 📚 Referências
@@ -564,6 +656,7 @@ Projeto desenvolvido como case técnico para processo seletivo Itaú.
 - ✅ Migrations com Flyway
 - ✅ Gradle Multi-Project
 - ✅ Logging e observabilidade
+- ✅ Documentação técnica completa
 
 ---
 
